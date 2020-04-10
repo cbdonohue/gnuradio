@@ -18,6 +18,8 @@ import codecs
 import logging
 
 from pygccxml import parser, declarations, utils
+from ...modtool.tools import ParserCCBlock
+from ...modtool.cli import ModToolException
 
 from ..core.base import BlockToolException, BlockTool
 from ..core.iosignature import io_signature, message_port
@@ -208,6 +210,58 @@ class GenericHeaderParser(BlockTool):
 
         return namespace_dict
 
+    def _parse_cc_h(self, fname_cc):
+        """ Go through a .cc and .h-file defining a block and return info """
+        def _type_translate(p_type, default_v=None):
+            """ Translates a type from C++ to GRC """
+            translate_dict = {'float': 'float',
+                              'double': 'real',
+                              'int': 'int',
+                              'gr_complex': 'complex',
+                              'char': 'byte',
+                              'unsigned char': 'byte',
+                              'std::string': 'string',
+                              'std::vector<int>': 'int_vector',
+                              'std::vector<float>': 'real_vector',
+                              'std::vector<gr_complex>': 'complex_vector',
+                              }
+            if p_type in ('int',) and default_v is not None and len(default_v) > 1 and default_v[:2].lower() == '0x':
+                return 'hex'
+            try:
+                return translate_dict[p_type]
+            except KeyError:
+                return 'raw'
+
+        def _get_blockdata(fname_cc):
+            """ Return the block name and the header file name from the .cc file name """
+            blockname = os.path.splitext(os.path.basename(
+                fname_cc.replace('_impl.', '.')))[0]
+            fname_h = (blockname + '.h').replace('_impl.', '.')
+            contains_modulename = blockname.startswith(
+                self.modname+'_')
+            blockname = blockname.replace(self.modname+'_', '', 1)
+            return (blockname, fname_h, contains_modulename)
+        # Go, go, go
+        LOGGER.info("Making GRC bindings for {}...".format(fname_cc))
+        (blockname, fname_h, contains_modulename) = _get_blockdata(fname_cc)
+        try:
+            parser = ParserCCBlock(fname_cc,
+                                   os.path.join(
+                                       self.targetdir, fname_h),
+                                   blockname,
+                                   40,
+                                   _type_translate
+                                   )
+        except IOError:
+            raise ModToolException(
+                "Can't open some of the files necessary to parse {}.".format(fname_cc))
+
+        if contains_modulename:
+            return (parser.read_params(), parser.read_io_signature(), self.modname+'_'+blockname)
+        else:
+            return (parser.read_params(), parser.read_io_signature(), blockname)
+
+
     def get_header_info(self, namespace_to_parse):
         """
         PyGCCXML header code parser
@@ -227,8 +281,9 @@ class GenericHeaderParser(BlockTool):
             compiler='gcc',
             define_symbols=['BOOST_ATOMIC_DETAIL_EXTRA_BACKEND_GENERIC'],
             cflags='-std=c++11')
-        decls = parser.parse(
-            [self.target_file], xml_generator_config)
+#        decls = parser.parse(
+#            [self.target_file], xml_generator_config)
+        (params, iosig, blockname) = self._parse_cc_h('/home/chris/gnuradio/oot_modules/gr-foo/include/foo/bar.cc')
         global_namespace = declarations.get_global_namespace(decls)
 
         # namespace
